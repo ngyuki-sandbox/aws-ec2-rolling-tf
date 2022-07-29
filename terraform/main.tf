@@ -124,13 +124,24 @@ resource "aws_lb_listener" "http" {
   port              = 80
 
   default_action {
-    target_group_arn = aws_lb_target_group.web.arn
+    target_group_arn = null_resource.web.triggers.target_group_arn
     type             = "forward"
   }
 }
 
+resource "aws_lb_listener" "dummy" {
+  load_balancer_arn = aws_lb.this.arn
+  protocol          = "HTTP"
+  port              = 8080
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.web.arn
+  }
+}
+
 resource "aws_lb_target_group" "web" {
-  name     = "${local.name}-web"
+  name     = substr(format("%s-%s", local.name, sha256(local.ami_id)), 0, 32)
   port     = 80
   protocol = "HTTP"
   vpc_id   = module.vpc.vpc_id
@@ -141,6 +152,28 @@ resource "aws_lb_target_group" "web" {
     matcher             = "200-399"
     interval            = 10
     timeout             = 5
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "null_resource" "web" {
+  triggers = {
+    target_group_arn = aws_lb_target_group.web.arn
+  }
+  provisioner "local-exec" {
+    command = <<-EOF
+      set -ex -o pipefail
+      if [ "$wait" -ne 0 ]; then
+        timeout "$wait" aws elbv2 wait target-in-service --target-group-arn "$target_group_arn"
+      fi
+    EOF
+    environment = {
+      wait = var.wait
+      target_group_arn = aws_lb_target_group.web.arn
+    }
   }
 }
 
